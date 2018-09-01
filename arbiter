@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+
+ARBITER_DIR=$(pwd)/.arbiter
+
+export DOCKER_HOST=unix://${ARBITER_DIR}/docker.sock
+
+function main(){
+		if [[ $# < 1 ]] ; then
+				echo "Usage: arbiter cmd [options]"
+				exit 1
+		fi
+
+		CMD=$1
+
+		case $CMD in
+				"ls"*)
+						echo "Doing ls"
+						;;
+				"connect"*)
+						connect $2
+						;;
+				"disconnect"*)
+						disconnect
+						;;
+				"docker"*)
+						docker ${@:2}
+						;;
+				*)
+						log_fatal "Unknown command: ${CMD}"
+						;;
+		esac
+}
+
+# Connects to a docker daemon potentially on a remote host by using
+# ssh to forward a unix socket on the remote host to the local machine
+#
+# see: https://medium.com/@dperny/forwarding-the-docker-socket-over-ssh-e6567cfab160
+function connect() {
+		local HOST=$1
+
+		if [[ -f ${ARBITER_DIR}/ssh.pid ]] || [[ -e ${ARBITER_DIR}/docker.sock ]] ; then
+				log_fatal "Either a connection is already open, or a previous one was not terminatted with 'arbiter disconect' - run that first"
+		fi
+
+		if [[ -z $HOST ]] ; then
+				log_fatal "Expected host argument (can use 'localhost')"
+				exit 1
+		fi
+
+		echo "Connecting to docker host: $1"
+
+		mkdir -p ${ARBITER_DIR}
+
+		ssh -nNT -L ${ARBITER_DIR}/docker.sock:/var/run/docker.sock $1 &
+
+		local SSH_PID=$!
+
+		echo "Started ssh process: ${SSH_PID}"
+
+		echo ${SSH_PID} > ${ARBITER_DIR}/ssh.pid
+}
+
+# Cleans up a connection previously opened by connect()
+# Note that this can cleanup if the connection was incorrectly
+# terminated (eg, machine was shutdown, and ARBITER_DIR is in
+# inconsitent state, with files that point to a connection that
+# was broken upon shutdown)
+function disconnect() {
+		if [[ -f ${ARBITER_DIR}/ssh.pid ]] ; then
+				SSH_PID=$(cat $(pwd)/.arbiter/ssh.pid)
+
+				echo "Killing SSH process: ${SSH_PID}"
+				kill ${SSH_PID} > /dev/null 2>&1
+				rm -f ${ARBITER_DIR}/ssh.pid
+		fi
+
+		if [[ -e ${ARBITER_DIR}/docker.sock ]] ; then
+				echo "Cleaning up socket file"
+				rm -f ${ARBITER_DIR}/docker.sock
+		fi
+}
+
+function log_fatal(){
+		tput setaf 1
+		>&2 printf "FATAL | "
+		tput sgr0
+		>&2 echo $1
+
+		exit 1
+}
+
+function log_info(){
+		tput setaf 6
+		printf "INFO  | "
+		tput sgr0
+		echo $1
+}
+
+
+
+main $@

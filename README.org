@@ -1,0 +1,19 @@
+#+TITLE: Arbiter
+
+* Overview
+
+	Arbiter is a command line tool for remotely controlling a docker swarm, with additional functionality for deploying stacks described by a =docker-compose.yaml= as well as the corresponding data directory to go with the stack, using [[https://github.com/jnterry/treeploy][treeploy]].
+
+* Connecting to Remote Systems
+
+	In order to work a manager in the swarm must be setup to accept SSH connections for a user in the docker group (or the root user). Arbiter can then establish a connection to the remote host using =arbiter connect username@hostname=.
+
+* Command List
+
+	Arbiter must be called as =arbiter COMMAND [ARGUMENTS]=, below is an overview of the available commands
+
+  | Command    | Arguments | What                                                                         |
+  |------------+-----------+------------------------------------------------------------------------------|
+  | connect    | user@host | Connects to remote for use by further arbiter commands ran in this directory |
+  | disconnect |           | Kills connection established by =connect=                                    |
+  | docker     | any       | Runs arbitrary docker commands on the connected remote                       |
