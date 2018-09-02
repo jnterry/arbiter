@@ -1,19 +1,71 @@
-#+TITLE: Arbiter
+#+TITLE: Arbiter - Opinionated docker swarm deployment
+
+* WARNING: PRE-RELEASE
+
+	- Feature Incomplete - Documentation describes more than is yet implemented
+	- Not recommended for production yet
 
 * Overview
 
-	Arbiter is a command line tool for remotely controlling a docker swarm, with additional functionality for deploying stacks described by a =docker-compose.yaml= as well as the corresponding data directory to go with the stack, using [[https://github.com/jnterry/treeploy][treeploy]].
+	Arbiter is a command line tool for remotely controlling a docker swarm, with additional functionality for deploying stacks described by a =docker-compose.yaml= file, as well as the corresponding data directory to go with the stack, using [[https://github.com/jnterry/treeploy][treeploy]].
+
+* Setup
+
+	- Install [[https://github.com/jnterry/treeploy][treeploy]]
+	- Add arbiter bash script to your path
+	- Create a "swarm descriptor" directory (see [[#directory-structure][Directory Strucutre]])
+	- Run =arbiter=
 
 * Connecting to Remote Systems
 
-	In order to work a manager in the swarm must be setup to accept SSH connections for a user in the docker group (or the root user). Arbiter can then establish a connection to the remote host using =arbiter connect username@hostname=.
+	In order to work arbiter needs to be able to connect to a manager in the docker swarm. One of the manager nodes in the swarm must be setup to accept SSH connections for a user in the docker group (or the root user). Arbiter can then establish a connection to the remote host using =arbiter connect username@hostname=.
+
+* Directory Structure
+
+	Arbiter is expect to be ran within a directory with a particular structure which describes the intended state of the stack; we will call this directory the "swarm descriptor".
+
+	Every directory within the swarm descriptor should be a directory describing a single stack to be deployed on the swarm, we will call these directories "stack descriptors".
+
+	For example:
+
+	- swarm_descriptor_dir
+		- git
+			- ...
+		- traefix
+			- ...
+		- portainer
+			- ...
+
+  Where =git=, =traefix= and =portainer= are the names of stacks to be deployed.
+
+	Stack descriptors must at minimum contain the following files:
+	- REPOSITORY
+		- Specifies the git repository for the stack, for example "git@github.com:user/stack.git"
+	- VERSION
+		- Specifies what to checkout from the git repository - this can be anything that can be passed to =git checkout=, for example, a branch name, commit sha or tag name.
+
+	In addition the stack descriptor may contain the following files:
+	- SSH_KEY -> Private key to use when cloning git repository from a remote host
+	- *.yaml, *.json -> Files to be passed to treeploy using the =--modelfile= flag
 
 * Command List
 
 	Arbiter must be called as =arbiter COMMAND [ARGUMENTS]=, below is an overview of the available commands
 
-  | Command    | Arguments | What                                                                         |
-  |------------+-----------+------------------------------------------------------------------------------|
-  | connect    | user@host | Connects to remote for use by further arbiter commands ran in this directory |
-  | disconnect |           | Kills connection established by =connect=                                    |
-  | docker     | any       | Runs arbitrary docker commands on the connected remote                       |
+  |------------+------------+-------------------------------------------------------------------------------|
+  | Command    | Arguments  | What                                                                          |
+  |------------+------------+-------------------------------------------------------------------------------|
+  | connect    | user@host  | Connects to remote for use by further arbiter commands ran in this directory  |
+  | disconnect |            | Kills connection established by =connect=                                     |
+  | docker     | any        | Runs arbitrary docker commands on the connected remote                        |
+  |------------+------------+-------------------------------------------------------------------------------|
+  | pull       | stack_name | Pulls a stack's git repo and checks out version specified by stack config     |
+  | build      | stack_name | Builds containers etc for a stack                                             |
+  | push       | stack_name | Push containers built for a stack to docker repository                        |
+  |------------+------------+-------------------------------------------------------------------------------|
+  | deploy     | stack_name | Deploys the stack's appdata directory to remote using treeploy                |
+  | start      | stack_name | Starts (or updates existing) stack on remote, using local docker-compose.yaml |
+  | stop       | stack_name | Stops a remote stack                                                          |
+  |------------+------------+-------------------------------------------------------------------------------|
+  | allinone   | stack_name | pulls, builds, deploys, starts a stack - no push as this is for local tests   |
+  |------------+------------+-------------------------------------------------------------------------------|
