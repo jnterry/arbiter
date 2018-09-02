@@ -107,22 +107,7 @@ function cmd_disconnect() {
 		rm -f ${ARBITER_DIR}/docker.sock ${ARBITER_DIR}/swarmhost ${ARBITER_DIR}/ssh.pid
 }
 
-
-
-################################################################################
-#
-# Helper functions below
-#
-################################################################################
-function log_fatal(){
-		tput setaf 1
-		>&2 printf "FATAL | "
-		tput sgr0
-		>&2 echo $1
-
-		exit 1
-}
-
+# Deletes data cached by arbiter for a stack
 function cmd_clean() {
 		local stack=$1
 
@@ -133,6 +118,8 @@ function cmd_clean() {
 		rm -rf ${ARBITER_DIR}/stacks/${stack}
 }
 
+# Pulls the git repo for some stack and checks out the version requiredd
+# for deployment
 function cmd_pull(){
 		local stack=$1
 
@@ -182,8 +169,10 @@ function cmd_pull(){
 		fi
 }
 
-
-function cmd_treeploy(){
+# Uses treeploy to deploy the appdata directory for a stack using all parameter
+# files in the stack descriptor directory, as well as parameters.yaml in the
+# directory from which arbiter is ran
+function cmd_treeploy() {
 		local stack=$1
 		local target_path=$2
 
@@ -213,6 +202,22 @@ function cmd_treeploy(){
 		done
 
 		exec $cmd
+}
+
+
+
+################################################################################
+#
+# Helper functions below
+#
+################################################################################
+function log_fatal(){
+		tput setaf 1
+		>&2 printf "FATAL | "
+		tput sgr0
+		>&2 echo $1
+
+		exit 1
 }
 
 function log_info(){
