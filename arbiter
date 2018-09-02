@@ -39,8 +39,8 @@ function main(){
 				"clean"*)
 						cmd_clean $2
 						;;
-				"treeploy"*)
-						cmd_treeploy $2 $3
+				"deploy"*)
+						cmd_deploy $2 $3
 						;;
 				*)
 						log_fatal "Unknown command: ${CMD}"
@@ -172,7 +172,7 @@ function cmd_pull(){
 # Uses treeploy to deploy the appdata directory for a stack using all parameter
 # files in the stack descriptor directory, as well as parameters.yaml in the
 # directory from which arbiter is ran
-function cmd_treeploy() {
+function cmd_deploy() {
 		local stack=$1
 		local target_path=$2
 
