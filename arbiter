@@ -212,10 +212,7 @@ function cmd_treeploy(){
 				cmd="$cmd --modelfile ${ARBITER_DIR}/stacks/${stack}/parameters/${file}"
 		done
 
-		echo $cmd
-
 		exec $cmd
-
 }
 
 function log_info(){
