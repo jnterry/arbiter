@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 
+#######################################################
+# Arbiter config
 ARBITER_DIR=$(pwd)/.arbiter
 
+# Ensure all docker commands ran in this script connect via arbiter's socket
 export DOCKER_HOST=unix://${ARBITER_DIR}/docker.sock
 
+################################################################################
+#
+# Main entry point to arbiter
+#
+################################################################################
 function main(){
 		if [[ $# < 1 ]] ; then
 				echo "Usage: arbiter cmd [options]"
@@ -17,13 +25,22 @@ function main(){
 						echo "Doing ls"
 						;;
 				"connect"*)
-						connect $2
+						cmd_connect $2
 						;;
 				"disconnect"*)
-						disconnect
+						cmd_disconnect
 						;;
 				"docker"*)
 						docker ${@:2}
+						;;
+				"pull"*)
+						cmd_pull $2
+						;;
+				"clean"*)
+						cmd_clean $2
+						;;
+				"treeploy"*)
+						cmd_treeploy $2 $3
 						;;
 				*)
 						log_fatal "Unknown command: ${CMD}"
@@ -31,14 +48,27 @@ function main(){
 		esac
 }
 
+
+
+################################################################################
+#
+# Command Functions
+#
+################################################################################
+
+
+
 # Connects to a docker daemon potentially on a remote host by using
 # ssh to forward a unix socket on the remote host to the local machine
 #
 # see: https://medium.com/@dperny/forwarding-the-docker-socket-over-ssh-e6567cfab160
-function connect() {
+function cmd_connect() {
 		local HOST=$1
 
-		if [[ -f ${ARBITER_DIR}/ssh.pid ]] || [[ -e ${ARBITER_DIR}/docker.sock ]] ; then
+		if [[ -f ${ARBITER_DIR}/ssh.pid     ]] || \
+			 [[ -e ${ARBITER_DIR}/docker.sock ]] || \
+			 [[ -e ${ARBITER_DIR}/swarmhost   ]]
+		then
 				log_fatal "Either a connection is already open, or a previous one was not terminatted with 'arbiter disconect' - run that first"
 		fi
 
@@ -49,14 +79,15 @@ function connect() {
 
 		echo "Connecting to docker host: $1"
 
+
+
 		mkdir -p ${ARBITER_DIR}
 
+		echo ${HOST} > ${ARBITER_DIR}/swarmhost
+
 		ssh -nNT -L ${ARBITER_DIR}/docker.sock:/var/run/docker.sock $1 &
-
 		local SSH_PID=$!
-
 		echo "Started ssh process: ${SSH_PID}"
-
 		echo ${SSH_PID} > ${ARBITER_DIR}/ssh.pid
 }
 
@@ -65,21 +96,24 @@ function connect() {
 # terminated (eg, machine was shutdown, and ARBITER_DIR is in
 # inconsitent state, with files that point to a connection that
 # was broken upon shutdown)
-function disconnect() {
+function cmd_disconnect() {
 		if [[ -f ${ARBITER_DIR}/ssh.pid ]] ; then
 				SSH_PID=$(cat $(pwd)/.arbiter/ssh.pid)
 
 				echo "Killing SSH process: ${SSH_PID}"
 				kill ${SSH_PID} > /dev/null 2>&1
-				rm -f ${ARBITER_DIR}/ssh.pid
 		fi
 
-		if [[ -e ${ARBITER_DIR}/docker.sock ]] ; then
-				echo "Cleaning up socket file"
-				rm -f ${ARBITER_DIR}/docker.sock
-		fi
+		rm -f ${ARBITER_DIR}/docker.sock ${ARBITER_DIR}/swarmhost ${ARBITER_DIR}/ssh.pid
 }
 
+
+
+################################################################################
+#
+# Helper functions below
+#
+################################################################################
 function log_fatal(){
 		tput setaf 1
 		>&2 printf "FATAL | "
@@ -89,6 +123,101 @@ function log_fatal(){
 		exit 1
 }
 
+function cmd_clean() {
+		local stack=$1
+
+		if [[ -z $stack ]] ; then
+				log_fatal "Expected <stack_name> argument"
+		fi
+
+		rm -rf ${ARBITER_DIR}/stacks/${stack}
+}
+
+function cmd_pull(){
+		local stack=$1
+
+		if [[ -z $stack ]] ; then
+				log_fatal "Expected <stack_name> argument"
+		fi
+
+		if [[ ! -f $(pwd)/${stack}/REPOSITORY ]] ; then
+				log_fatal "Stack '${stack}' is missing REPOSITORY file"
+		fi
+	  local repo=$(cat $(pwd)/${stack}/REPOSITORY)
+
+		if [[ ! -f $(pwd)/${stack}/VERSION ]] ; then
+				log_fatal "Stack '${stack}' is missing VERSION file"
+		fi
+		local version=$(cat $(pwd)/${stack}/VERSION)
+
+		mkdir -p ${ARBITER_DIR}/stacks
+
+		if [[ ! -d ${ARBITER_DIR}/stacks/${stack} ]] ; then
+				git clone ${repo} ${ARBITER_DIR}/stacks/${stack}
+		else
+				CUR_REMOTE=$(cd ${ARBITER_DIR}/stacks/${stack} && git remote -v | grep origin | head -n 1 | awk '{ print $2 }')
+
+				# Check that the remote is correct, readlink condition
+				# is incase we are cloning a local git repo, and git has changed
+				# the path to an absolute one
+				if [[ ${CUR_REMOTE} != $repo ]] && \
+					 [[ ! $(readlink ${repo}) == $(readlink ${CUR_REMOTE}) ]]
+				then
+
+						log_fatal "Checkout for ${stack} already exists with remote ${CUR_REMOTE}, but ${repo} was requested - try 'arbiter clean ${stack}'"
+
+				fi
+
+				(cd ${ARBITER_DIR}/stacks/${stack} && git fetch)
+		fi
+
+		if [[ $? != 0 ]] ; then
+				log_fatal "Failed to update ${repo}"
+		fi
+
+		(cd ${ARBITER_DIR}/stacks/${stack} && git checkout ${version})
+
+		if [[ $? != 0 ]] ; then
+				log_fatal "Failed to checkout ${version}"
+		fi
+}
+
+
+function cmd_treeploy(){
+		local stack=$1
+		local target_path=$2
+
+		if [[ -z $stack ]] || [[ -z ${target_path} ]] ; then
+				log_fatal "Expected <stack> <target_path> arguments"
+		fi
+
+
+
+		local repo=$(cat $(pwd)/$stack/REPOSITORY)
+		local version=$(cat $(pwd)/$stack/VERSION)
+
+		if [[ ! -d ${ARBITER_DIR}/stacks/$stack ]] ; then
+				cmd_pull $stack
+		fi
+
+		local swarmhost=$(cat ${ARBITER_DIR}/swarmhost)
+
+		local cmd="treeploy ${ARBITER_DIR}/stacks/${stack}/appdata ${swarmhost}:${target_path} -vv --force"
+
+		if [[ -f ./parameters.yaml ]] ; then
+			 cmd="$cmd --modelfile ./parameters.yaml --targetdriver use_sudo true"
+		fi
+
+		for file in $(ls ${ARBITER_DIR}/stacks/${stack}/parameters/ | grep '.yaml$\|.yml$\|.json$') ; do
+				cmd="$cmd --modelfile ${ARBITER_DIR}/stacks/${stack}/parameters/${file}"
+		done
+
+		echo $cmd
+
+		exec $cmd
+
+}
+
 function log_info(){
 		tput setaf 6
 		printf "INFO  | "
@@ -96,6 +225,6 @@ function log_info(){
 		echo $1
 }
 
-
-
+# We'd better actually run main...
+# Right down at the bottom so that everything is in scope by the time we execute
 main $@
