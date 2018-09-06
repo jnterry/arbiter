@@ -25,7 +25,7 @@ function main(){
 						echo "Doing ls"
 						;;
 				"connect"*)
-						cmd_connect $2
+						cmd_connect $2 $3
 						;;
 				"disconnect"*)
 						cmd_disconnect
@@ -42,6 +42,12 @@ function main(){
 				"deploy"*)
 						cmd_deploy $2 $3
 						;;
+				"start"*)
+						cmd_start $2
+						;;
+				"stop"*)
+						cmd_stop $2
+						;;
 				*)
 						log_fatal "Unknown command: ${CMD}"
 						;;
@@ -56,39 +62,43 @@ function main(){
 #
 ################################################################################
 
-
-
 # Connects to a docker daemon potentially on a remote host by using
 # ssh to forward a unix socket on the remote host to the local machine
 #
 # see: https://medium.com/@dperny/forwarding-the-docker-socket-over-ssh-e6567cfab160
 function cmd_connect() {
 		local HOST=$1
+		local STACK_DATA_ROOT=$2
 
-		if [[ -f ${ARBITER_DIR}/ssh.pid     ]] || \
-			 [[ -e ${ARBITER_DIR}/docker.sock ]] || \
-			 [[ -e ${ARBITER_DIR}/swarmhost   ]]
+		if [[ -f ${ARBITER_DIR}/ssh.pid       ]] || \
+			 [[ -e ${ARBITER_DIR}/docker.sock   ]] || \
+			 [[ -f ${ARBITER_DIR}/swarmhost     ]] || \
+			 [[ -f ${ARBITER_DIR}/stackdataroot ]]
 		then
 				log_fatal "Either a connection is already open, or a previous one was not terminatted with 'arbiter disconect' - run that first"
 		fi
 
-		if [[ -z $HOST ]] ; then
-				log_fatal "Expected host argument (can use 'localhost')"
+		if [[ -z ${HOST} ]] || [[ -z ${STACK_DATA_ROOT} ]] ; then
+				log_fatal "Expected arguments <hostname> <stack_data_dir>"
 				exit 1
 		fi
 
-		echo "Connecting to docker host: $1"
 
-
+		echo "Connecting to docker host: ${HOST}"
 
 		mkdir -p ${ARBITER_DIR}
 
-		echo ${HOST} > ${ARBITER_DIR}/swarmhost
+		echo ${HOST}            > ${ARBITER_DIR}/swarmhost
+		echo ${STACK_DATA_ROOT} > ${ARBITER_DIR}/stackdataroot
 
-		ssh -nNT -L ${ARBITER_DIR}/docker.sock:/var/run/docker.sock $1 &
-		local SSH_PID=$!
-		echo "Started ssh process: ${SSH_PID}"
-		echo ${SSH_PID} > ${ARBITER_DIR}/ssh.pid
+		if [[ ${HOST} =~ "^(.+@)?(localhost|127.0.0.1|$(hostname))$" ]] ; then
+				ln -sf /var/run/docker.sock ${ARBITER_DIR}/docker.sock
+		else
+				ssh -nNT -L ${ARBITER_DIR}/docker.sock:/var/run/docker.sock $1 &
+				local SSH_PID=$!
+				echo "Started ssh process: ${SSH_PID}"
+				echo ${SSH_PID} > ${ARBITER_DIR}/ssh.pid
+		fi
 }
 
 # Cleans up a connection previously opened by connect()
@@ -104,7 +114,7 @@ function cmd_disconnect() {
 				kill ${SSH_PID} > /dev/null 2>&1
 		fi
 
-		rm -f ${ARBITER_DIR}/docker.sock ${ARBITER_DIR}/swarmhost ${ARBITER_DIR}/ssh.pid
+		rm -f ${ARBITER_DIR}/docker.sock ${ARBITER_DIR}/swarmhost ${ARBITER_DIR}/ssh.pid ${ARBITER_DIR}/stackdataroot
 }
 
 # Deletes data cached by arbiter for a stack
@@ -174,14 +184,16 @@ function cmd_pull(){
 # directory from which arbiter is ran
 function cmd_deploy() {
 		local stack=$1
-		local target_path=$2
 
-		if [[ -z $stack ]] || [[ -z ${target_path} ]] ; then
-				log_fatal "Expected <stack> <target_path> arguments"
+		if [[ -z $stack ]] ; then
+				log_fatal "Expected <stack> arguments"
 		fi
 
+		if [[ ! -f ${ARBITER_DIR}/stackdataroot ]] ; then
+				log_fatal "Stack data root not specified - try disconnecting and reconnecting"
+		fi
 
-
+		local target_path=$(cat ${ARBITER_DIR}/stackdataroot)/${stack}
 		local repo=$(cat $(pwd)/$stack/REPOSITORY)
 		local version=$(cat $(pwd)/$stack/VERSION)
 
@@ -193,15 +205,69 @@ function cmd_deploy() {
 
 		local cmd="treeploy ${ARBITER_DIR}/stacks/${stack}/appdata ${swarmhost}:${target_path} -vv --force"
 
-		if [[ -f ./parameters.yaml ]] ; then
-			 cmd="$cmd --modelfile ./parameters.yaml --targetdriver use_sudo true"
+		cmd=${cmd}$(gen_treeploy_model_args_string ${stack})
+
+		eval $cmd
+}
+
+function cmd_start() {
+		local STACK=$1
+
+		if [[ -z ${STACK} ]] ; then
+				log_fatal "Exepcted <stack> argument"
 		fi
 
-		for file in $(ls ${ARBITER_DIR}/stacks/${stack}/parameters/ | grep '.yaml$\|.yml$\|.json$') ; do
-				cmd="$cmd --modelfile ${ARBITER_DIR}/stacks/${stack}/parameters/${file}"
-		done
+		if [[ ! -f ${ARBITER_DIR}/stackdataroot ]] ; then
+				log_fatal "Stack data root not specified - try disconnecting and reconnecting"
+		fi
 
-		exec $cmd
+	  export STACK_DATA_DIR="$(cat ${ARBITER_DIR}/stackdataroot)/${STACK}"
+
+		local STACK_DIR=${ARBITER_DIR}/stacks/${STACK}
+
+		if [[ ! -d ${STACK_DIR} ]] ; then
+				log_fatal "Stack is not checked out - try 'arbiter ${stack} pull' first (you probably also want to 'arbiter ${stack} deploy' if you haven't yet) "
+		fi
+
+		local COMPOSE_FILE=${STACK_DIR}/docker-compose.yaml
+
+		if [[ ! -f ${COMPOSE_FILE} ]] ; then
+
+				if [[ -f ${STACK_DIR}/docker-compose.yaml.dot ]] ; then
+						# Then we need to process the compose file
+
+						mkdir -p ${ARBITER_DIR}/compose
+
+						COMPOSE_FILE=${ARBITER_DIR}/compose/${STACK}.yaml
+
+						local cmd="treeploy ${STACK_DIR}/docker-compose.yaml.dot ${COMPOSE_FILE} --overwrite "
+						cmd=${cmd}$(gen_treeploy_model_args_string $1)
+
+						echo "Generating docker-compose file..."
+						eval ${cmd}
+
+						if [[ $? != 0 ]] ; then
+								log_fatal "Failed to generate docker-compose file from dot template"
+						fi
+
+				else
+						log_fatal "Failed to find file docker-compose.yaml or docker-compose.yaml.dot in stack repository"
+				fi
+		fi
+
+		echo "Updating stack deployment on docker host..."
+		echo "Data dir is: ${STACK_DATA_DIR}"
+	  docker stack deploy --compose-file=${COMPOSE_FILE} ${STACK}
+}
+
+function cmd_stop() {
+		local STACK=$1
+
+		if [[ -z ${STACK} ]] ; then
+				log_fatal "Expected <stack> argument"
+		fi
+
+		docker stack rm ${STACK}
 }
 
 
@@ -211,6 +277,32 @@ function cmd_deploy() {
 # Helper functions below
 #
 ################################################################################
+
+# Generates the CLI arguments to treeploy to load all the model files relevant
+# to some stack
+function gen_treeploy_model_args_string () {
+		local stack=$1
+		local cmd=""
+
+		if [[ -f ./parameters.yaml ]] ; then
+				cmd="$cmd --modelfile ./parameters.yaml --targetdriver use_sudo true"
+		fi
+
+		# Load defaults from the stack repo
+		for file in $(ls ${ARBITER_DIR}/stacks/${stack}/parameters | grep '.yaml$\|.yml$\|.json$') ; do
+				cmd="$cmd --modelfile ${ARBITER_DIR}/stacks/${stack}/parameters/${file}"
+		done
+
+		# Load overrides specific to this swarm
+		for file in $(ls ${stack} | grep '.yaml$\|.yml$\|.json$') ; do
+				cmd="$cmd --modelfile ${stack}/${file}"
+		done
+
+		# Idea is to call this function inside $(...), hence stdout will be captured
+		# as a return - see https://stackoverflow.com/a/3236940/1313573
+	  echo "${cmd}"
+}
+
 function log_fatal(){
 		tput setaf 1
 		>&2 printf "FATAL | "
