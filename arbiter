@@ -227,12 +227,6 @@ function cmd_start() {
 				log_fatal "Exepcted <stack> argument"
 		fi
 
-		if [[ ! -f ${ARBITER_DIR}/stackdataroot ]] ; then
-				log_fatal "Stack data root not specified - try disconnecting and reconnecting"
-		fi
-
-	  export STACK_DATA_DIR="$(cat ${ARBITER_DIR}/stackdataroot)/${STACK}"
-
 		local STACK_DIR=${ARBITER_DIR}/stacks/${STACK}
 
 		if [[ ! -d ${STACK_DIR} ]] ; then
@@ -266,7 +260,6 @@ function cmd_start() {
 		fi
 
 		echo "Updating stack deployment on docker host..."
-		echo "Data dir is: ${STACK_DATA_DIR}"
 	  docker stack deploy --compose-file=${COMPOSE_FILE} ${STACK}
 }
 
@@ -288,6 +281,16 @@ function cmd_stop() {
 #
 ################################################################################
 
+function get_stack_data_root () {
+		local stack=$1
+
+		if [[ ! -f ${ARBITER_DIR}/stackdataroot ]] ; then
+				log_fatal "Stack data root not specified - try disconnecting and reconnecting"
+		fi
+
+		echo $(cat ${ARBITER_DIR}/stackdataroot)/${stack}
+}
+
 # Generates the CLI arguments to treeploy to load all the model files relevant
 # to some stack
 function gen_treeploy_model_args_string () {
@@ -307,6 +310,10 @@ function gen_treeploy_model_args_string () {
 		for file in $(ls ${stack} | grep '.yaml$\|.yml$\|.json$') ; do
 				cmd="$cmd --modelfile ${stack}/${file}"
 		done
+
+		# Set stack data
+		cmd="${cmd} --model stack.name ${stack}"
+		cmd="${cmd} --model stack.data_dir $(get_stack_data_root ${stack})"
 
 		# Idea is to call this function inside $(...), hence stdout will be captured
 		# as a return - see https://stackoverflow.com/a/3236940/1313573
