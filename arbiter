@@ -177,6 +177,16 @@ function cmd_pull(){
 		if [[ $? != 0 ]] ; then
 				log_fatal "Failed to checkout ${version}"
 		fi
+
+		(cd ${ARBITER_DIR}/stacks/${stack} && git status | grep 'On branch' > /dev/null)
+
+		if [[ $? == 0 ]] ; then
+				git pull
+
+				if [[ $? != 0 ]] ; then
+						log_fatal "Failed to pull changes for branch"
+				fi
+		fi
 }
 
 # Uses treeploy to deploy the appdata directory for a stack using all parameter
