@@ -48,6 +48,12 @@ function main(){
 				"stop"*)
 						cmd_stop $2
 						;;
+				"build"*)
+						cmd_build $2
+						;;
+				"push"*)
+						cmd_push $2
+						;;
 				*)
 						log_fatal "Unknown command: ${CMD}"
 						;;
@@ -181,7 +187,7 @@ function cmd_pull(){
 		(cd ${ARBITER_DIR}/stacks/${stack} && git status | grep 'On branch' > /dev/null)
 
 		if [[ $? == 0 ]] ; then
-				git pull
+				(cd ${ARBITER_DIR}/stacks/${stack} && git pull)
 
 				if [[ $? != 0 ]] ; then
 						log_fatal "Failed to pull changes for branch"
@@ -273,6 +279,59 @@ function cmd_stop() {
 		docker stack rm ${STACK}
 }
 
+function cmd_build() {
+		local STACK=$1
+
+		# Ensure we use the local docker host rather than remote...
+		local OLD_DOCKER_HOST=${DOCKER_HOST}
+		export DOCKER_HOST=''
+
+		if [[ -z ${STACK} ]] ; then
+				log_fatal "Expected <stack> argument"
+		fi
+
+		if [[ -f ${ARBITER_DIR}/stacks/${STACK}/containers/dobi.yaml ]] ; then
+				echo "Building containers with dobi"
+
+				pushd ${ARBITER_DIR}/stacks/${STACK}/containers/ > /dev/null
+				dobi build
+				popd > /dev/null
+		fi
+
+		if [[ -f ${ARBITER_DIR}/stacks/${STACK}/Makefile ]] ; then
+				echo "Running root makefile"
+
+				pushd ${ARBITER_DIR}/stacks/${STACK} > /dev/null
+				make
+				popd > /dev/null
+		fi
+
+		# Restore old docker host
+		export DOCKER_HOST=${OLD_DOCKER_HOST}
+}
+
+function cmd_push() {
+		local STACK=$1
+
+		# Ensure we use the local docker host rather than remote...
+		local OLD_DOCKER_HOST=${DOCKER_HOST}
+		export DOCKER_HOST=''
+
+		if [[ -z ${STACK} ]] ; then
+				log_fatal "Expected <stack> argument"
+		fi
+
+		if [[ -f ${ARBITER_DIR}/stacks/${STACK}/containers/dobi.yaml ]] ; then
+				echo "Pushing containers with dobi"
+
+				pushd ${ARBITER_DIR}/stacks/${STACK}/containers/ > /dev/null
+				dobi push
+				popd > /dev/null
+		fi
+
+		# Restore old docker host
+		export DOCKER_HOST=${OLD_DOCKER_HOST}
+}
 
 
 ################################################################################
@@ -302,9 +361,11 @@ function gen_treeploy_model_args_string () {
 		fi
 
 		# Load defaults from the stack repo
-		for file in $(ls ${ARBITER_DIR}/stacks/${stack}/parameters | grep '.yaml$\|.yml$\|.json$') ; do
-				cmd="$cmd --modelfile ${ARBITER_DIR}/stacks/${stack}/parameters/${file}"
-		done
+		if [[ -d ${ARBITER_DIR}/stacks/${stack}/parameters ]] ; then
+				for file in $(ls ${ARBITER_DIR}/stacks/${stack}/parameters | grep '.yaml$\|.yml$\|.json$') ; do
+						cmd="$cmd --modelfile ${ARBITER_DIR}/stacks/${stack}/parameters/${file}"
+				done
+		fi
 
 		# Load overrides specific to this swarm
 		for file in $(ls ${stack} | grep '.yaml$\|.yml$\|.json$') ; do
