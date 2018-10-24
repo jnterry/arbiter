@@ -155,6 +155,14 @@ function cmd_pull(){
 
 		mkdir -p ${ARBITER_DIR}/stacks
 
+		if [[ ${version} =~ 'local' ]] ; then
+				if [[ -e ${ARBITER_DIR}/stacks/${stack} ]] ; then
+						rm -r ${ARBITER_DIR}/stacks/${stack}
+				fi
+				ln -sf "$(readlink -f ${repo})" "${ARBITER_DIR}/stacks/${stack}"
+				return 0
+		fi
+
 		if [[ ! -d ${ARBITER_DIR}/stacks/${stack} ]] ; then
 				git clone ${repo} ${ARBITER_DIR}/stacks/${stack}
 		else
