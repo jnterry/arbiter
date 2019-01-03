@@ -219,16 +219,20 @@ function cmd_deploy() {
 		fi
 
 		local target_path=$(cat ${ARBITER_DIR}/stackdataroot)/${stack}
-		local repo=$(cat $(pwd)/$stack/REPOSITORY)
-		local version=$(cat $(pwd)/$stack/VERSION)
-
-		if [[ ! -d ${ARBITER_DIR}/stacks/$stack ]] ; then
-				cmd_pull $stack
+		local swarmhost=$(cat ${ARBITER_DIR}/swarmhost)
+		local local_path=""
+		if [[ -f $(pwd)/$stack/REPOSITORY ]] ; then
+				local_path="${ARBITER_DIR}/stacks/${stack}/appdata"
+				if [[ ! -d ${ARBITER_DIR}/stacks/$stack ]] ; then
+						cmd_pull $stack
+				fi
+		elif [[ -d $(pwd)/$stack/appdata ]] ; then
+				local_path="$(pwd)/$stack/appdata"
+		else
+				log_fatal "$stack has neither a REPOSITORY file nor a local file structure"
 		fi
 
-		local swarmhost=$(cat ${ARBITER_DIR}/swarmhost)
-
-		local cmd="treeploy ${ARBITER_DIR}/stacks/${stack}/appdata ${swarmhost}:${target_path} -vv --force"
+		local cmd="treeploy ${local_path} ${swarmhost}:${target_path} -vv --force"
 
 		cmd=${cmd}$(gen_treeploy_model_args_string ${stack})
 
@@ -243,39 +247,58 @@ function cmd_start() {
 		fi
 
 		local STACK_DIR=${ARBITER_DIR}/stacks/${STACK}
-
-		if [[ ! -d ${STACK_DIR} ]] ; then
-				log_fatal "Stack is not checked out - try 'arbiter ${stack} pull' first (you probably also want to 'arbiter ${stack} deploy' if you haven't yet) "
+		local COMPOSE_FILE=""
+		local COMPOSE_IS_TEMPLATE=""
+		if [[ -f $(pwd)/${STACK}/REPOSITORY ]] ; then
+				if [[ ! -d ${STACK_DIR} ]] ; then
+						 log_fatal "Stack is not checked out - try 'arbiter ${stack} pull' first (you probably also want to 'arbiter ${stack} deploy' if you haven't yet) "
+				else
+						if [[ -f "${STACK_DIR}/docker-compose.yaml" ]] ; then
+								COMPOSE_FILE="${STACK_DIR}/docker-compose.yaml"
+						elif [[ -f "${STACK_DIR}/docker-compose.yaml.dot" ]] ; then
+								COMPOSE_FILE="${STACK_DIR}/docker-compose.yaml.dot"
+								COMPOSE_IS_TEMPLATE="1"
+						else
+								log_fatal "Checked out stack has no docker-compose.yaml at root"
+						fi
+				fi
+		elif [[ -f $(pwd)/${STACK}/docker-compose.yaml ]] ; then
+				COMPOSE_FILE="$(pwd)/${STACK}/docker-compose.yaml"
+		elif [[ -f $(pwd)/${STACK}/docker-compose.yaml.dot ]] ; then
+				COMPOSE_FILE="$(pwd)/${STACK}/docker-compose.yaml.dot"
+				COMPOSE_IS_TEMPLATE="1"
+		else
+				log_fatal "Unable to find docker-compose.yaml for stack '${STACK}'"
 		fi
 
-		local COMPOSE_FILE=${STACK_DIR}/docker-compose.yaml
+		SHOULD_DEL_COMPOSE=""
+		if [[ ${COMPOSE_IS_TEMPLATE} == "1" ]] ; then
+				mkdir -p ${ARBITER_DIR}/compose
 
-		if [[ ! -f ${COMPOSE_FILE} ]] ; then
+				# The compose file should be placed in the same directory as the
+				# original since it may make relative references to other files
+				local TARGET="$(dirname ${COMPOSE_FILE})/.tmp-compose-$(date +%s)"
 
-				if [[ -f ${STACK_DIR}/docker-compose.yaml.dot ]] ; then
-						# Then we need to process the compose file
+				local cmd="treeploy ${COMPOSE_FILE} ${TARGET} --overwrite "
+				cmd=${cmd}$(gen_treeploy_model_args_string $1)
 
-						mkdir -p ${ARBITER_DIR}/compose
+				echo "Generating docker-compose file..."
+				eval ${cmd}
 
-						COMPOSE_FILE=${ARBITER_DIR}/compose/${STACK}.yaml
-
-						local cmd="treeploy ${STACK_DIR}/docker-compose.yaml.dot ${COMPOSE_FILE} --overwrite "
-						cmd=${cmd}$(gen_treeploy_model_args_string $1)
-
-						echo "Generating docker-compose file..."
-						eval ${cmd}
-
-						if [[ $? != 0 ]] ; then
-								log_fatal "Failed to generate docker-compose file from dot template"
-						fi
-
-				else
-						log_fatal "Failed to find file docker-compose.yaml or docker-compose.yaml.dot in stack repository"
+				if [[ $? != 0 ]] ; then
+						log_fatal "Failed to generate docker-compose file from dot template"
 				fi
+
+				SHOULD_DEL_COMPOSE="1"
+				COMPOSE_FILE=${TARGET}
 		fi
 
 		echo "Updating stack deployment on docker host..."
 	  docker stack deploy --compose-file=${COMPOSE_FILE} --with-registry-auth ${STACK}
+
+		if [[ ! -z ${SHOULD_DEL_COMPOSE} ]] ; then
+				rm ${COMPOSE_FILE}
+		fi
 }
 
 function cmd_stop() {
@@ -297,26 +320,56 @@ function cmd_build() {
 
 		if [[ -z ${STACK} ]] ; then
 				log_fatal "Expected <stack> argument"
+		elif [[ ! -d $(pwd)/${STACK} ]] ; then
+				log_fatal "No such stack ${STACK}"
 		fi
 
-		if [[ -f ${ARBITER_DIR}/stacks/${STACK}/containers/dobi.yaml ]] ; then
-				echo "Building containers with dobi"
+		declare -a POTENTIAL_DIRS=("${ARBITER_DIR}/stacks/${STACK}" "$(pwd)/${STACK}/")
+		DONE=""
+		for DIR in "${POTENTIAL_DIRS[@]}" ; do
+				if [[ -f ${DIR}/containers/dobi.yaml ]] ; then
+						pushd ${DIR}/containers/ > /dev/null
+						echo "Running containers/dobi.yaml"
+						dobi build
+						DONE="1"
+						popd > /dev/null
+				fi
 
-				pushd ${ARBITER_DIR}/stacks/${STACK}/containers/ > /dev/null
-				dobi build
-				popd > /dev/null
-		fi
+				if [[ -f ${DIR}/containers/Makefile ]] ; then
+						pushd ${DIR}/containers/ > /dev/null
+						echo "Running containers/Makefile"
+					  make -j16
+						DONE="1"
+						popd > /dev/null
+				fi
 
-		if [[ -f ${ARBITER_DIR}/stacks/${STACK}/Makefile ]] ; then
-				echo "Running root makefile"
+				if [[ -f ${DIR}/dobi.yaml ]] ; then
+						pushd ${DIR} > /dev/null
+						echo "Running dobi.yaml"
+						dobi build
+						DONE="1"
+						popd > /dev/null
+				fi
 
-				pushd ${ARBITER_DIR}/stacks/${STACK} > /dev/null
-				make
-				popd > /dev/null
-		fi
+				if [[ -f ${DIR}/Makefile ]] ; then
+						pushd ${DIR} > /dev/null
+						echo "Running Makefile"
+					  make -j16
+						DONE="1"
+						popd > /dev/null
+				fi
+
+				if [[ ! -z ${DONE} ]] ; then
+						break
+				fi
+		done
 
 		# Restore old docker host
 		export DOCKER_HOST=${OLD_DOCKER_HOST}
+
+		if [[ -z ${DONE} ]] ; then
+				log_fatal "Could not find any dobi.yaml or Makefiles to be ran"
+		fi
 }
 
 function cmd_push() {
@@ -330,16 +383,32 @@ function cmd_push() {
 				log_fatal "Expected <stack> argument"
 		fi
 
-		if [[ -f ${ARBITER_DIR}/stacks/${STACK}/containers/dobi.yaml ]] ; then
-				echo "Pushing containers with dobi"
+		declare -a POTENTIAL_DIRS=( \
+			"${ARBITER_DIR}/stacks/${STACK}/containers" \
+			"${ARBITER_DIR}/stacks/${STACK}" \
+			"$(pwd)/${STACK}/containers" \
+			"$(pwd)/${STACK}" \
+		)
 
-				pushd ${ARBITER_DIR}/stacks/${STACK}/containers/ > /dev/null
-				dobi push
-				popd > /dev/null
-		fi
+		DONE=""
+		for DIR in "${POTENTIAL_DIRS[@]}" ; do
+
+				if [[ -f ${DIR}/dobi.yaml ]] ; then
+						echo "Pushing with dobi.yaml"
+						pushd ${DIR} > /dev/null
+						dobi push
+						popd > /dev/nul
+						DONE="1"
+						break
+				fi
+		done
 
 		# Restore old docker host
 		export DOCKER_HOST=${OLD_DOCKER_HOST}
+
+		if [[ -z ${DONE} ]] ; then
+				log_fatal "Could not find any dobi.yaml file"
+		fi
 }
 
 
