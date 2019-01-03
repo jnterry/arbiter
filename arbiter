@@ -453,6 +453,8 @@ function gen_treeploy_model_args_string () {
 		# Set stack data
 		cmd="${cmd} --model stack.name ${stack}"
 		cmd="${cmd} --model stack.data_dir $(get_stack_data_root ${stack})"
+		cmd="${cmd} --model swarm.node_count    $(docker info -f '{{json .Swarm.Nodes }}')"
+		cmd="${cmd} --model swarm.manager_count $(docker info -f '{{json .Swarm.Managers }}')"
 
 		# Idea is to call this function inside $(...), hence stdout will be captured
 		# as a return - see https://stackoverflow.com/a/3236940/1313573
