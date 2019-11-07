@@ -22,7 +22,7 @@
 
 * Directory Structure
 
-	Arbiter is expect to be ran within a directory with a particular structure which describes the intended state of the stack; we will call this directory the "swarm descriptor".
+	Arbiter is expect to be ran within a directory with a particular structure which describes the intended state of the stack; we will call this directory the "swarm descriptor". The design was initially inspired by this article: https://opencredo.com/blogs/versioning-a-microservice-system-with-git/
 
 	Every directory within the swarm descriptor should be a directory describing a single stack to be deployed on the swarm, we will call these directories "stack descriptors".
 
